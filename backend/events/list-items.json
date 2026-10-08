@@ -1,0 +1,20 @@
+{
+  "resource": "/items",
+  "path": "/items",
+  "httpMethod": "GET",
+  "headers": {
+    "Accept": "application/json"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "resourcePath": "/items",
+    "httpMethod": "GET",
+    "stage": "prod"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}

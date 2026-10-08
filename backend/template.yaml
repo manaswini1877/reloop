@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: ReLoop backend – Phase 1 (S3 bucket, DynamoDB table, /upload-url endpoint)
+Description: ReLoop backend – Phase 2 (adds GET /items and GET /items/{id})
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -116,6 +116,42 @@ Resources:
               Action:
                 - s3:PutObject
               Resource: !Sub "arn:aws:s3:::${ImageBucket}/uploads/*"
+
+  # ── GET /items Lambda ─────────────────────────────────────────────────────
+  ListItemsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: functions/list_items/
+      Description: Returns all items from DynamoDB, sorted newest first (up to 100).
+      Events:
+        ListItemsGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReloopApi
+            Path: /items
+            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ItemsTable
+
+  # ── GET /items/{id} Lambda ────────────────────────────────────────────────
+  GetItemFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: functions/get_item/
+      Description: Returns a single item by id from DynamoDB.
+      Events:
+        GetItemGet:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReloopApi
+            Path: /items/{id}
+            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref ItemsTable
 
 # ---------------------------------------------------------------------------
 # Outputs

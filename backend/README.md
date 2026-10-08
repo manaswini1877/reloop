@@ -181,6 +181,123 @@ No secrets are hardcoded anywhere. All names come from CloudFormation references
 
 | Phase | Endpoints | Status |
 |-------|-----------|--------|
-| 1 (this) | `POST /upload-url` | ✅ done |
-| 2 | `POST /analyze` | 🔜 |
-| 3 | `GET /items`, `GET /items/{id}` | 🔜 |
+| 1 | `POST /upload-url` | ✅ done |
+| 2 (this) | `GET /items`, `GET /items/{id}` | ✅ done |
+| 3 | `POST /analyze` | 🔜 |
+
+---
+
+## Phase 2 – Deploy, seed, and test
+
+### Deploy the updated stack ⚠️ changes AWS resources
+
+> **Stop and confirm before running.** The existing stack is updated in-place (no data loss).
+
+```powershell
+cd C:\Users\manas\reloop\backend
+sam build
+sam deploy          # uses samconfig.toml from Phase 1 – no --guided needed
+```
+
+After deploy confirm all three outputs still appear:
+
+```powershell
+aws cloudformation describe-stacks `
+    --stack-name reloop-backend `
+    --region us-east-1 `
+    --query "Stacks[0].Outputs" `
+    --output table
+```
+
+---
+
+### Seed demo data ⚠️ writes to DynamoDB
+
+Set your variables (replace with real values from the stack outputs):
+
+```powershell
+$API   = "https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/prod"
+$TABLE = "reloop-backend-ItemsTable-XXXXXXXXXXXX"
+```
+
+Run the seed script (it will ask you to type "yes"):
+
+```powershell
+$env:TABLE_NAME = $TABLE
+python backend\scripts\seed_items.py
+```
+
+Or pass the table name directly:
+
+```powershell
+python backend\scripts\seed_items.py --table $TABLE
+```
+
+---
+
+### Test GET /items
+
+```powershell
+$r = Invoke-RestMethod -Method Get -Uri "$API/items"
+$r.items | ConvertTo-Json -Depth 5
+```
+
+Expected: 4 items, newest first. `confidence` should be a number like `0.82`, not a string.
+
+Check ordering and confidence type:
+
+```powershell
+$r.items | Select-Object item, route, confidence, created_at
+$r.items[0].confidence.GetType().Name   # should print "Double" or "Int32"
+```
+
+---
+
+### Test GET /items/{id}
+
+Grab an id from the list and fetch it:
+
+```powershell
+$id = $r.items[0].id
+Invoke-RestMethod -Method Get -Uri "$API/items/$id" | ConvertTo-Json -Depth 5
+```
+
+Expected: the full Item object with all contract fields.
+
+---
+
+### Test 404
+
+```powershell
+try {
+    Invoke-RestMethod -Method Get -Uri "$API/items/does-not-exist"
+} catch {
+    $_.Exception.Response.StatusCode.value__   # should print 404
+    $_.ErrorDetails.Message | ConvertFrom-Json  # {"error":"Item not found"}
+}
+```
+
+---
+
+### Test OPTIONS (CORS preflight)
+
+```powershell
+$p = Invoke-WebRequest -Method Options `
+    -Uri "$API/items" `
+    -Headers @{ "Origin" = "http://localhost:3000"; "Access-Control-Request-Method" = "GET" }
+$p.StatusCode
+$p.Headers
+```
+
+Expected: `200` with `Access-Control-Allow-Origin: *`.
+
+---
+
+### Remove seed data ⚠️ deletes rows from DynamoDB
+
+```powershell
+python backend\scripts\seed_items.py --delete --table $TABLE
+```
+
+The script only removes rows whose `image_key` starts with `uploads/seed-`. Real uploaded items are untouched.
+

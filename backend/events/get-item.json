@@ -1,0 +1,22 @@
+{
+  "resource": "/items/{id}",
+  "path": "/items/sample-id-replace-me",
+  "httpMethod": "GET",
+  "headers": {
+    "Accept": "application/json"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": {
+    "id": "sample-id-replace-me"
+  },
+  "stageVariables": null,
+  "requestContext": {
+    "resourcePath": "/items/{id}",
+    "httpMethod": "GET",
+    "stage": "prod"
+  },
+  "body": null,
+  "isBase64Encoded": false
+}
