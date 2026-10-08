@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: ReLoop backend – Phase 2 (adds GET /items and GET /items/{id})
+Description: ReLoop backend – Phase 3 (adds POST /analyze with Bedrock and mock support)
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -152,6 +152,38 @@ Resources:
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref ItemsTable
+
+  # ── POST /analyze Lambda ──────────────────────────────────────────────────
+  AnalyzeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: functions/analyze/
+      Description: Analyzes an uploaded e-waste image via Bedrock or mock mode.
+      Timeout: 28
+      MemorySize: 512
+      Events:
+        AnalyzePost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReloopApi
+            Path: /analyze
+            Method: POST
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource: !Sub "arn:aws:s3:::${ImageBucket}/uploads/*"
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+              Resource: !GetAtt ItemsTable.Arn
+            # Cross-region inference profiles need several resource ARNs; this is a hackathon simplification to tighten later.
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
 
 # ---------------------------------------------------------------------------
 # Outputs

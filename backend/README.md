@@ -182,8 +182,9 @@ No secrets are hardcoded anywhere. All names come from CloudFormation references
 | Phase | Endpoints | Status |
 |-------|-----------|--------|
 | 1 | `POST /upload-url` | ✅ done |
-| 2 (this) | `GET /items`, `GET /items/{id}` | ✅ done |
-| 3 | `POST /analyze` | 🔜 |
+| 2 | `GET /items`, `GET /items/{id}` | ✅ done |
+| 3 (this) | `POST /analyze` (Bedrock + Mock) | ✅ done |
+| 4 | Fallback cache & resilience | 🔜 |
 
 ---
 
@@ -300,4 +301,136 @@ python backend\scripts\seed_items.py --delete --table $TABLE
 ```
 
 The script only removes rows whose `image_key` starts with `uploads/seed-`. Real uploaded items are untouched.
+
+---
+
+## Phase 3 – POST /analyze (Bedrock & Mock Mode)
+
+### Unit tests (pure Python, runs on your laptop)
+
+```powershell
+py -3.12 backend\tests\test_logic.py
+```
+
+Expected: `ALL UNIT TESTS PASSED!`
+
+---
+
+### Deploy Phase 3 ⚠️ changes AWS resources
+
+> **Stop and confirm before running.** The existing stack is updated in-place.
+
+```powershell
+cd C:\Users\manas\reloop\backend
+sam build
+sam deploy
+```
+
+---
+
+### Prompt replacement note
+
+`backend/functions/analyze/prompt.txt` contains a placeholder prompt.
+**Member A (AI engineer)** owns the real prompt and will replace this file when the prompt engineering is finalized.
+After replacing `prompt.txt`, simply rebuild and deploy:
+
+```powershell
+sam build
+sam deploy
+```
+
+---
+
+### Switching between Mock and Real Bedrock mode
+
+In `backend/samconfig.toml`, find `parameter_overrides` and configure:
+
+**Mock mode (default during development):**
+```toml
+parameter_overrides = "UseMock=\"true\" BedrockModelId=\"\""
+```
+
+**Real Bedrock mode (once AWS Bedrock access is active):**
+```toml
+parameter_overrides = "UseMock=\"false\" BedrockModelId=\"anthropic.claude-3-haiku-20240307-v1:0\""
+```
+*(Replace the model ID with your chosen Bedrock foundation model or cross-region inference profile ARN).*
+
+Then redeploy:
+```powershell
+sam deploy
+```
+
+---
+
+### Test the /analyze endpoint in PowerShell
+
+#### 1. Upload an image and get an `image_key`
+```powershell
+$API = "https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/prod"
+
+# Request upload URL
+$uploadReq = Invoke-RestMethod -Method Post `
+    -Uri "$API/upload-url" `
+    -ContentType "application/json" `
+    -Body '{"filename":"test.jpg","content_type":"image/jpeg"}'
+
+$uploadUrl = $uploadReq.upload_url
+$imageKey  = $uploadReq.image_key
+Write-Host "Image Key: $imageKey"
+
+# Upload dummy image bytes via presigned S3 PUT
+[System.IO.File]::WriteAllBytes("$env:TEMP\test.jpg", [byte[]](0xFF,0xD8,0xFF,0xE0,0x00,0x10,0x4A,0x46,0x49,0x46,0x00,0x01,0x01,0x00,0x00,0x01,0x00,0x01,0x00,0x00,0xFF,0xD9))
+curl.exe -X PUT $uploadUrl -H "Content-Type: image/jpeg" --upload-file "$env:TEMP\test.jpg" --silent
+```
+
+#### 2. Call POST /analyze
+```powershell
+$analyzeBody = @{ image_key = $imageKey } | ConvertTo-Json
+$item = Invoke-RestMethod -Method Post `
+    -Uri "$API/analyze" `
+    -ContentType "application/json" `
+    -Body $analyzeBody
+
+$item | ConvertTo-Json -Depth 5
+```
+Expected: `200` with all contract fields (`id`, `image_key`, `created_at`, `item`, `condition`, `battery_risk`, `swollen_battery`, `route`, `confidence`, `reason`, `safe_steps_en`, `safe_steps_te`, `status`).
+`confidence` is a number (e.g. `0.92`), and `status` is `"reported"`.
+
+#### 3. Verify item appears in GET /items
+```powershell
+$itemsResp = Invoke-RestMethod -Method Get -Uri "$API/items"
+$newest = $itemsResp.items[0]
+Write-Host "Newest Item ID: $($newest.id) | Route: $($newest.route) | Key: $($newest.image_key)"
+```
+
+#### 4. Test bad key (400 validation)
+```powershell
+try {
+    Invoke-RestMethod -Method Post -Uri "$API/analyze" -ContentType "application/json" -Body '{"image_key":"bad_path.exe"}'
+} catch {
+    $_.Exception.Response.StatusCode.value__    # 400
+    $_.ErrorDetails.Message | ConvertFrom-Json   # {"error":"..."}
+}
+```
+
+#### 5. Test non-existent key in real Bedrock mode (404)
+*(When UseMock=false)*
+```powershell
+try {
+    Invoke-RestMethod -Method Post -Uri "$API/analyze" -ContentType "application/json" -Body '{"image_key":"uploads/nonexistent-uuid.jpg"}'
+} catch {
+    $_.Exception.Response.StatusCode.value__    # 404
+    $_.ErrorDetails.Message | ConvertFrom-Json   # {"error":"Image not found"}
+}
+```
+
+#### 6. CORS preflight (OPTIONS /analyze)
+```powershell
+$opt = Invoke-WebRequest -Method Options -Uri "$API/analyze" -Headers @{ "Origin" = "http://localhost:3000"; "Access-Control-Request-Method" = "POST" }
+$opt.StatusCode
+$opt.Headers["Access-Control-Allow-Origin"]
+```
+Expected: `200` with `Access-Control-Allow-Origin: *`.
+
 

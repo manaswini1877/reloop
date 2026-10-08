@@ -1,0 +1,21 @@
+{
+  "resource": "/analyze",
+  "path": "/analyze",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "resourcePath": "/analyze",
+    "httpMethod": "POST",
+    "stage": "prod"
+  },
+  "body": "{\"image_key\": \"uploads/00000000-0000-0000-0000-000000000000.jpg\"}",
+  "isBase64Encoded": false
+}
