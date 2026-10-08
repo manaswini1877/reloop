@@ -6,42 +6,54 @@ import { UI } from '../i18n.js';
 export default function AdminList({ onSelectItem }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState(null);
-
-  // Function to fetch current items from API
-  const fetchItems = async () => {
-    try {
-      const data = await getItems();
-      if (data && Array.isArray(data.items)) {
-        // Ensure newest first by created_at timestamp
-        const sorted = [...data.items].sort(
-          (a, b) => new Date(b.created_at) - new Date(a.created_at)
-        );
-        setItems(sorted);
-        setError(null);
-      }
-    } catch (err) {
-      console.error('Error fetching items:', err);
-      setError('Unable to load items.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   // Poll getItems every 5 seconds; clean up interval on unmount
   useEffect(() => {
-    fetchItems(); // Initial fetch
+    let isMounted = true;
 
-    const intervalId = setInterval(() => {
-      fetchItems();
-    }, 5000);
+    const fetchItems = async () => {
+      try {
+        const data = await getItems();
+        if (!isMounted) return;
+        if (data && Array.isArray(data.items)) {
+          // Ensure newest first by created_at timestamp
+          const sorted = [...data.items].sort(
+            (a, b) => new Date(b.created_at) - new Date(a.created_at)
+          );
+          setItems(sorted);
+          setReconnecting(false);
+          setError(null);
+        }
+      } catch (err) {
+        if (!isMounted) return;
+        console.error('Error fetching items feed:', err);
+        // Keep showing existing items on transient poll failure and display reconnecting note
+        setReconnecting(true);
+        setItems((currentItems) => {
+          if (currentItems.length === 0) {
+            setError('Unable to load items feed.');
+          }
+          return currentItems;
+        });
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    fetchItems(); // Initial fetch
+    const intervalId = setInterval(fetchItems, 5000);
 
     return () => {
+      isMounted = false;
       clearInterval(intervalId);
     };
   }, []);
 
-  // Format timestamp to user-friendly readable format
+  // Format timestamp to readable time
   const formatTime = (isoString) => {
     if (!isoString) return '';
     try {
@@ -70,9 +82,18 @@ export default function AdminList({ onSelectItem }) {
       <div className="header-box">
         <h1 className="screen-title">{UI.adminTitle}</h1>
         <p className="screen-subtitle">{UI.adminSubtitle}</p>
-        <div className="poll-badge">
-          <span className="pulse-dot"></span>
-          <span>{UI.pollStatus}</span>
+        <div className="status-badge-row">
+          {reconnecting ? (
+            <div className="reconnecting-badge" role="status">
+              <span className="reconnecting-dot"></span>
+              <span>Reconnecting...</span>
+            </div>
+          ) : (
+            <div className="poll-badge">
+              <span className="pulse-dot"></span>
+              <span>{UI.pollStatus}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -109,6 +130,24 @@ export default function AdminList({ onSelectItem }) {
                   }
                 }}
               >
+                {/* Placeholder thumbnail box with camera/box icon */}
+                <div className="item-row-thumbnail-box" aria-hidden="true">
+                  <svg
+                    className="thumbnail-icon"
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
+                </div>
+
                 <div className="item-row-info">
                   <div className="item-row-name-wrap">
                     {isHazard && <span className="hazard-warning-icon" title="Hazardous">⚠️</span>}

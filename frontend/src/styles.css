@@ -414,6 +414,43 @@ button:active, .btn:active {
   background-color: #fffdfd;
 }
 
+/* Photo or Placeholder in Result Card */
+.result-image-box {
+  width: 100%;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  background-color: #f8fafc;
+}
+
+.result-image {
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+  display: block;
+}
+
+.result-placeholder-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  gap: 6px;
+  color: var(--text-muted);
+  background-color: #f1f5f9;
+}
+
+.result-placeholder-box .placeholder-icon {
+  color: #94a3b8;
+}
+
+.result-placeholder-box .placeholder-caption {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-light);
+}
+
 .result-header {
   display: flex;
   align-items: flex-start;
@@ -658,6 +695,11 @@ button:active, .btn:active {
   gap: 12px;
 }
 
+.status-badge-row {
+  display: flex;
+  align-items: center;
+}
+
 .poll-badge {
   display: inline-flex;
   align-items: center;
@@ -666,6 +708,35 @@ button:active, .btn:active {
   color: var(--brand-green);
   font-weight: 600;
   margin-top: 2px;
+}
+
+.reconnecting-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--repair-amber);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.reconnecting-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--repair-amber);
+  animation: pulse-amber 1.2s infinite;
+}
+
+@keyframes pulse-amber {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
 }
 
 .pulse-dot {
@@ -724,11 +795,31 @@ button:active, .btn:active {
   transform: scale(0.99);
 }
 
+/* Row thumbnail placeholder box */
+.item-row-thumbnail-box {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background-color: #f1f5f9;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
 /* Hazard Row highlighted RED */
 .item-row-hazard {
   background-color: #fef2f2 !important;
   border: 1.5px solid #f87171 !important;
   box-shadow: 0 2px 8px rgba(220, 38, 38, 0.1);
+}
+
+.item-row-hazard .item-row-thumbnail-box {
+  background-color: #fee2e2;
+  border-color: #fca5a5;
+  color: var(--hazard-red);
 }
 
 .item-row-info {

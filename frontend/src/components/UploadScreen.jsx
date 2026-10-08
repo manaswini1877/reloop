@@ -1,22 +1,35 @@
 // Screen for students to capture or select a photo of e-waste and analyze it.
 import { useState, useRef } from 'react';
 import { getUploadUrl, uploadToS3, analyze } from '../api.js';
+import { isValidImageType, resizeImage } from '../imageUtils.js';
 import { UI } from '../i18n.js';
 
 export default function UploadScreen({ onAnalyzeSuccess }) {
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState('Uploading photo...');
   const [errorMessage, setErrorMessage] = useState(null);
+  // Track uploaded S3 key to avoid re-uploading if only the analyze step failed
+  const [uploadedKey, setUploadedKey] = useState(null);
   const fileInputRef = useRef(null);
 
   // Handle image selection from file picker or camera
   const handleFileChange = (e) => {
     const file = e.target.files && e.target.files[0];
     if (file) {
+      if (!isValidImageType(file)) {
+        setErrorMessage('Please choose a JPG, PNG or WebP photo');
+        setSelectedFile(null);
+        setPreviewUrl(null);
+        setUploadedKey(null);
+        return;
+      }
+
       setSelectedFile(file);
       setPreviewUrl(URL.createObjectURL(file));
       setErrorMessage(null);
+      setUploadedKey(null);
     }
   };
 
@@ -27,37 +40,86 @@ export default function UploadScreen({ onAnalyzeSuccess }) {
     }
   };
 
-  // Perform upload and analysis flow
-  const handleAnalyze = async () => {
+  // Perform upload and analysis flow with retry support
+  const handleAnalyze = async (resumeAnalyzeOnly = false) => {
     if (!selectedFile) {
-      setErrorMessage(UI.noPhotoSelected);
+      setErrorMessage('Please choose a JPG, PNG or WebP photo');
       return;
     }
 
-    setLoading(true);
+    if (!isValidImageType(selectedFile)) {
+      setErrorMessage('Please choose a JPG, PNG or WebP photo');
+      return;
+    }
+
     setErrorMessage(null);
+    setLoading(true);
 
     try {
-      // Step 1: Request presigned upload URL
-      const { upload_url, image_key } = await getUploadUrl(
-        selectedFile.name,
-        selectedFile.type || 'image/jpeg'
-      );
+      let imageKey = uploadedKey;
 
-      // Step 2: Upload file to storage
-      await uploadToS3(upload_url, selectedFile);
+      // Step 1: Resize and upload (skip if already successfully uploaded)
+      if (!resumeAnalyzeOnly || !imageKey) {
+        setLoadingStep('Uploading photo...');
 
-      // Step 3: Call AI analyze endpoint
-      const result = await analyze(image_key);
+        // Resize image on device (max 1280px longest side, <= 3.5MB JPEG)
+        let resizedBlob;
+        try {
+          resizedBlob = await resizeImage(selectedFile);
+        } catch {
+          resizedBlob = selectedFile;
+        }
 
-      // Success callback
-      onAnalyzeSuccess(result);
+        // Request presigned S3 upload URL
+        let uploadData;
+        try {
+          uploadData = await getUploadUrl('photo.jpg', 'image/jpeg');
+        } catch (err) {
+          console.error('Upload URL request failed:', err);
+          throw new Error('UPLOAD_FAILED');
+        }
+
+        // Upload to S3 using ONLY Content-Type: image/jpeg header
+        try {
+          await uploadToS3(uploadData.upload_url, resizedBlob);
+        } catch (err) {
+          console.error('S3 PUT failed:', err);
+          throw new Error('UPLOAD_FAILED');
+        }
+
+        imageKey = uploadData.image_key;
+        setUploadedKey(imageKey);
+      }
+
+      // Step 2: Submit for AI classification
+      setLoadingStep('Analyzing...');
+      let result;
+      try {
+        result = await analyze(imageKey);
+      } catch (err) {
+        console.error('Analyze request failed:', err);
+        throw new Error('ANALYZE_FAILED');
+      }
+
+      // Successfully finished
+      setUploadedKey(null);
+      onAnalyzeSuccess(result, previewUrl);
     } catch (err) {
-      console.error('Analysis error:', err);
-      setErrorMessage(err.message || UI.analysisFailed);
+      // Friendly, non-technical error messages
+      if (err.message === 'UPLOAD_FAILED') {
+        setErrorMessage('Upload failed. Check your connection and try again.');
+      } else {
+        setErrorMessage('We could not analyze this photo. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  // Handle retry: resume from analyze step if upload already succeeded, otherwise restart
+  const handleRetry = () => {
+    const shouldResumeAnalyze = Boolean(uploadedKey);
+    handleAnalyze(shouldResumeAnalyze);
   };
 
   return (
@@ -71,7 +133,7 @@ export default function UploadScreen({ onAnalyzeSuccess }) {
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/jpeg,image/png,image/webp"
         capture="environment"
         onChange={handleFileChange}
         style={{ display: 'none' }}
@@ -113,11 +175,11 @@ export default function UploadScreen({ onAnalyzeSuccess }) {
         </div>
       )}
 
-      {/* Loading State */}
+      {/* Loading State with step indicators */}
       {loading && (
         <div className="loading-card" role="status" aria-live="polite">
           <div className="spinner"></div>
-          <h3 className="loading-title">{UI.analyzingTitle}</h3>
+          <h3 className="loading-title">{loadingStep}</h3>
           <p className="loading-subtitle">{UI.analyzingSubtitle}</p>
         </div>
       )}
@@ -127,13 +189,13 @@ export default function UploadScreen({ onAnalyzeSuccess }) {
         <div className="error-card" role="alert">
           <div className="error-icon">⚠️</div>
           <div className="error-text">
-            <strong>{UI.errorTitle}</strong>
+            <strong>{UI.errorTitle || 'Notice'}</strong>
             <p>{errorMessage}</p>
           </div>
           <button
             type="button"
             className="btn btn-retry"
-            onClick={handleAnalyze}
+            onClick={handleRetry}
           >
             {UI.retryBtn}
           </button>
@@ -146,7 +208,7 @@ export default function UploadScreen({ onAnalyzeSuccess }) {
           <button
             type="button"
             className="btn btn-success big-analyze-btn"
-            onClick={handleAnalyze}
+            onClick={() => handleAnalyze(false)}
           >
             {UI.analyzeBtn}
           </button>

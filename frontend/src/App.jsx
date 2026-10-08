@@ -9,22 +9,26 @@ export default function App() {
   // Navigation states: 'report' | 'result' | 'items'
   const [currentScreen, setCurrentScreen] = useState('report');
   const [activeItem, setActiveItem] = useState(null);
+  const [activePreviewUrl, setActivePreviewUrl] = useState(null);
 
-  // When an item is analyzed, navigate to Result screen
-  const handleAnalyzeSuccess = (item) => {
+  // When an item is analyzed, navigate to Result screen with local photo preview
+  const handleAnalyzeSuccess = (item, previewUrl) => {
     setActiveItem(item);
+    setActivePreviewUrl(previewUrl || null);
     setCurrentScreen('result');
   };
 
-  // When an item is clicked in the Admin List, navigate to Result screen
+  // When an item is clicked in the Admin List, navigate to Result screen (no local preview)
   const handleSelectItem = (item) => {
     setActiveItem(item);
+    setActivePreviewUrl(null);
     setCurrentScreen('result');
   };
 
   // Return to report flow
   const handleReportAnother = () => {
     setActiveItem(null);
+    setActivePreviewUrl(null);
     setCurrentScreen('report');
   };
 
@@ -55,6 +59,7 @@ export default function App() {
         {currentScreen === 'result' && (
           <ResultScreen
             item={activeItem}
+            previewUrl={activePreviewUrl}
             onReportAnother={handleReportAnother}
             onViewAllItems={handleViewAllItems}
           />

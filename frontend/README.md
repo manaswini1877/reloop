@@ -35,38 +35,44 @@ The application will be accessible at `http://localhost:5173/` (or the port spec
 
 ---
 
-## Switching Between Mock and Real Mode
+## Switching Between Mock Mode and Real Mode
 
-The frontend communicates through the standardized contract in `src/api.js`. You can toggle between **Mock Mode** (Phase 1 default) and **Real API Mode** using environment variables.
+The frontend communicates through the standardized contract in `src/api.js`. You can toggle between **Mock Mode** (local testing) and **Real Mode** (live AWS backend) using environment variables.
 
-### 1. Mock Mode (Phase 1 Default)
+### 1. Mock Mode (Local Fallback)
 In your `frontend/.env` file:
 ```env
 VITE_USE_MOCK=true
-VITE_API_BASE_URL=
+VITE_API_URL=
 ```
-- In Mock Mode, no backend or AWS connection is required.
+- No AWS backend connection or cloud network access required.
 - Simulates realistic 1.5-second scan latency.
 - In-memory list updates dynamically when new items are analyzed.
-- Admin list polls and reflects newly analyzed items automatically every 5 seconds.
+- Admin list polls every 5 seconds and immediately reflects newly analyzed items.
+- Perfect for offline development, local demos, and fallback testing.
 
-### 2. Real API Mode (Phase 2)
+### 2. Real Mode (Live Backend)
 In your `frontend/.env` file:
 ```env
 VITE_USE_MOCK=false
-VITE_API_BASE_URL=https://your-api-gateway-or-server.com
+VITE_API_URL=https://mn67sloi6c.execute-api.us-east-1.amazonaws.com/prod
 ```
-- Calls the live backend endpoints:
-  - `POST /upload-url` (presigned S3 upload URL)
-  - `PUT <upload_url>` (direct binary upload)
-  - `POST /analyze` (AI classification)
-  - `GET /items` (campus items feed)
-  - `GET /items/{id}` (item detail)
+- Connects directly to the live AWS API Gateway and S3 bucket:
+  - `POST /upload-url`: requests presigned S3 upload URL for `photo.jpg` (`image/jpeg`).
+  - `PUT <upload_url>`: uploads the client-resized JPEG blob (under 3.5 MB, max 1280px) with only `Content-Type: image/jpeg`.
+  - `POST /analyze`: submits `image_key` for AI classification and DynamoDB persistence.
+  - `GET /items`: auto-polls the latest campus e-waste reports every 5 seconds.
+  - `GET /items/{id}`: retrieves individual item detail.
+- Client-side error handling:
+  - If S3 upload fails, offers an immediate retry from the upload step.
+  - If analysis fails (e.g., HTTP 502 or network error), offers a retry directly from the analyze step using the already-uploaded image key.
+  - If background polling encounters a transient network drop, shows a subtle "Reconnecting..." status while keeping the existing items list visible without disruption.
 
 ---
 
 ## Features
-- **Mobile-First UX**: Optimized for mobile screens (e.g. 375px width) with touch targets >= 44px.
+- **Mobile-First UX**: Optimized for mobile touch devices (min 44px tap targets, responsive layout).
+- **Client-Side Image Optimization**: Pre-upload downscaling to max 1280px and progressive JPEG quality reduction (0.8 -> 0.7 -> 0.6 -> 0.5) ensuring payloads stay safely under 3.5 MB.
 - **Hazard Alerts**: Instant red banner (`HAZARD - do not put in a bin`) and highlighted safe-handling callout for swollen batteries and high-risk electronics.
 - **Bilingual Safe Handling**: One-tap toggle between English and Telugu for safe-handling steps.
-- **Campus Stream (Admin Feed)**: Auto-polling list updating every 5 seconds without manual page reload.
+- **Campus Stream (Admin Feed)**: Auto-polling list updating every 5 seconds without manual page reload, with graceful transient reconnect handling and item placeholder fallbacks.

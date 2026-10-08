@@ -1,33 +1,37 @@
 // API client for ReLoop.
-// Reads VITE_USE_MOCK and VITE_API_BASE_URL.
-// Defaults to mock mode (Phase 1) with an in-memory list and simulated delays.
+// Reads VITE_USE_MOCK and VITE_API_URL.
+// Supports both Real Mode (Phase 2 backend) and Mock Mode (fallback with in-memory store).
 
 import { MOCK_ITEMS } from './mockData.js';
 
-// In-memory list initialized with the 4 realistic mock items
+// In-memory list initialized with realistic mock items for mock mode
 let inMemoryItems = [...MOCK_ITEMS];
 let mockAnalyzeIndex = 0;
 
-// Helper to check whether we should use mock data
-const isMockMode = () => {
+// Helper to check whether we should use mock data (defaults to true if unset)
+export const isMockMode = () => {
   const envVal = import.meta?.env?.VITE_USE_MOCK;
-  return envVal === undefined || envVal === null || envVal === 'true' || envVal === true;
+  if (envVal === 'false' || envVal === false) {
+    return false;
+  }
+  return true;
 };
 
-// Helper to get base API URL
-const getBaseUrl = () => {
-  return import.meta?.env?.VITE_API_BASE_URL || '';
+// Helper to get base API URL with trailing slash stripped
+export const getBaseUrl = () => {
+  const url = import.meta?.env?.VITE_API_URL || '';
+  return url.replace(/\/+$/, '');
 };
 
-// Helper for simulated delay
+// Helper for simulated delay in mock mode
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Request a presigned S3 upload URL.
- * Contract: POST /upload-url body {"filename":"x.jpg","content_type":"image/jpeg"}
+ * Contract: POST /upload-url body {"filename":"photo.jpg","content_type":"image/jpeg"}
  * Returns: {"upload_url":"...","image_key":"uploads/<uuid>.jpg"}
  */
-export async function getUploadUrl(filename, contentType = 'image/jpeg') {
+export async function getUploadUrl(filename = 'photo.jpg', contentType = 'image/jpeg') {
   if (isMockMode()) {
     await delay(300);
     const mockUuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -39,7 +43,6 @@ export async function getUploadUrl(filename, contentType = 'image/jpeg') {
     };
   }
 
-  // TODO: Real mode is untested in Phase 1.
   const response = await fetch(`${getBaseUrl()}/upload-url`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -54,21 +57,21 @@ export async function getUploadUrl(filename, contentType = 'image/jpeg') {
 }
 
 /**
- * Upload the binary file to the presigned S3 URL.
+ * Upload the binary blob to the presigned S3 URL.
+ * Uses ONLY Content-Type: image/jpeg header per contract (no Auth or extra headers).
  */
-export async function uploadToS3(uploadUrl, file) {
+export async function uploadToS3(uploadUrl, blob) {
   if (isMockMode()) {
     await delay(300);
     return true;
   }
 
-  // TODO: Real mode is untested in Phase 1.
   const response = await fetch(uploadUrl, {
     method: 'PUT',
     headers: {
-      'Content-Type': file.type || 'image/jpeg'
+      'Content-Type': 'image/jpeg'
     },
-    body: file
+    body: blob
   });
 
   if (!response.ok) {
@@ -79,9 +82,8 @@ export async function uploadToS3(uploadUrl, file) {
 }
 
 /**
- * Submit an uploaded image for e-waste AI classification.
+ * Submit an uploaded image key for e-waste AI classification.
  * Contract: POST /analyze body {"image_key":"uploads/<uuid>.jpg"} -> Item
- * Mock mode: 1.5 second fake delay, cycles next mock item, prepends to list so getItems shows it.
  */
 export async function analyze(imageKey) {
   if (isMockMode()) {
@@ -109,7 +111,6 @@ export async function analyze(imageKey) {
     return analyzedItem;
   }
 
-  // TODO: Real mode is untested in Phase 1.
   const response = await fetch(`${getBaseUrl()}/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -124,7 +125,7 @@ export async function analyze(imageKey) {
         errorDetail = errJson.error;
       }
     } catch {
-      // Fallback to HTTP status text
+      // Fallback to default message
     }
     throw new Error(errorDetail);
   }
@@ -138,11 +139,9 @@ export async function analyze(imageKey) {
  */
 export async function getItems() {
   if (isMockMode()) {
-    // Instant or light delay for responsive polling
     return { items: [...inMemoryItems] };
   }
 
-  // TODO: Real mode is untested in Phase 1.
   const response = await fetch(`${getBaseUrl()}/items`);
   if (!response.ok) {
     throw new Error(`Failed to fetch items: ${response.status}`);
@@ -164,7 +163,6 @@ export async function getItem(id) {
     return found;
   }
 
-  // TODO: Real mode is untested in Phase 1.
   const response = await fetch(`${getBaseUrl()}/items/${id}`);
   if (!response.ok) {
     throw new Error(`Failed to fetch item: ${response.status}`);
