@@ -1,0 +1,21 @@
+{
+  "resource": "/upload-url",
+  "path": "/upload-url",
+  "httpMethod": "POST",
+  "headers": {
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "multiValueHeaders": {},
+  "queryStringParameters": null,
+  "multiValueQueryStringParameters": null,
+  "pathParameters": null,
+  "stageVariables": null,
+  "requestContext": {
+    "resourcePath": "/upload-url",
+    "httpMethod": "POST",
+    "stage": "prod"
+  },
+  "body": "{\"filename\": \"test.jpg\", \"content_type\": \"image/jpeg\"}",
+  "isBase64Encoded": false
+}

@@ -1,0 +1,134 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: ReLoop backend – Phase 1 (S3 bucket, DynamoDB table, /upload-url endpoint)
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: ""
+    Description: >
+      Bedrock model ID used by the /analyze function (Phase 2).
+      Leave empty for Phase 1.
+  UseMock:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: When "true" the /analyze function returns mock data (Phase 2).
+
+# ---------------------------------------------------------------------------
+# Globals – applied to every AWS::Serverless::Function unless overridden
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 15
+    MemorySize: 256
+    Environment:
+      Variables:
+        BUCKET_NAME: !Ref ImageBucket
+        TABLE_NAME: !Ref ItemsTable
+        BEDROCK_MODEL_ID: !Ref BedrockModelId
+        USE_MOCK: !Ref UseMock
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ── S3 bucket ─────────────────────────────────────────────────────────────
+  ImageBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Block every form of public access
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      # CORS – allows the browser to PUT directly to S3 and read objects.
+      # TODO: tighten AllowedOrigins to your production domain before going live.
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods:
+              - PUT
+              - GET
+              - HEAD
+            AllowedOrigins:
+              - "*"
+            AllowedHeaders:
+              - "*"
+            MaxAge: 3600
+
+      # Lifecycle – auto-delete raw uploads after 30 days to limit storage costs.
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-uploads-30-days
+            Status: Enabled
+            Prefix: "uploads/"
+            ExpirationInDays: 30
+
+  # ── DynamoDB table ────────────────────────────────────────────────────────
+  ItemsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+
+  # ── API Gateway (REST) ────────────────────────────────────────────────────
+  ReloopApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowOrigin: "'*'"
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type'"
+
+  # ── /upload-url Lambda ────────────────────────────────────────────────────
+  UploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.lambda_handler
+      CodeUri: functions/upload_url/
+      Description: Returns a presigned S3 PUT URL for direct browser upload.
+      Events:
+        UploadUrlPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ReloopApi
+            Path: /upload-url
+            Method: POST
+      Policies:
+        # Allow only PutObject under the uploads/ prefix – nothing else.
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource: !Sub "arn:aws:s3:::${ImageBucket}/uploads/*"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: Base URL for the ReLoop REST API (prod stage)
+    Value: !Sub "https://${ReloopApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  BucketName:
+    Description: Name of the S3 bucket that stores uploaded images
+    Value: !Ref ImageBucket
+
+  TableName:
+    Description: Name of the DynamoDB table that stores Item records
+    Value: !Ref ItemsTable
