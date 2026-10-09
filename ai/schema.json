@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ReLoop E-Waste Analysis Model Output",
+  "description": "Schema for the 8-field raw model output from Bedrock vision analysis.",
+  "type": "object",
+  "required": [
+    "item",
+    "condition",
+    "battery_risk",
+    "swollen_battery",
+    "repairable",
+    "still_usable",
+    "confidence",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "item": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short name of the e-waste item."
+    },
+    "condition": {
+      "type": "string",
+      "enum": ["good", "worn", "damaged"],
+      "description": "Physical condition of the item."
+    },
+    "battery_risk": {
+      "type": "string",
+      "enum": ["none", "low", "medium", "high"],
+      "description": "Risk level associated with battery safety."
+    },
+    "swollen_battery": {
+      "type": "boolean",
+      "description": "True if the battery is swollen, bulged, or deformed."
+    },
+    "repairable": {
+      "type": "boolean",
+      "description": "True if the item can reasonably be repaired."
+    },
+    "still_usable": {
+      "type": "boolean",
+      "description": "True if the item powers on and functions without repair."
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Model confidence in overall analysis between 0 and 1."
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Short sentence explaining the assessment."
+    }
+  }
+}

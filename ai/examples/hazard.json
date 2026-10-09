@@ -1,0 +1,10 @@
+{
+  "item": "power bank",
+  "condition": "damaged",
+  "battery_risk": "high",
+  "swollen_battery": true,
+  "repairable": false,
+  "still_usable": false,
+  "confidence": 0.95,
+  "reason": "Power bank battery casing is visibly swollen and bulging."
+}

@@ -1,0 +1,10 @@
+{
+  "item": "phone charger",
+  "condition": "damaged",
+  "battery_risk": "none",
+  "swollen_battery": false,
+  "repairable": false,
+  "still_usable": false,
+  "confidence": 0.90,
+  "reason": "Frayed cable and non-functional wall adapter with no battery."
+}

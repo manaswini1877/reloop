@@ -1,0 +1,10 @@
+{
+  "item": "smartphone",
+  "condition": "worn",
+  "battery_risk": "low",
+  "swollen_battery": false,
+  "repairable": false,
+  "still_usable": true,
+  "confidence": 0.85,
+  "reason": "Older phone with cosmetic scuffs but powers on and is functional."
+}

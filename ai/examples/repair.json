@@ -1,0 +1,10 @@
+{
+  "item": "smartphone",
+  "condition": "damaged",
+  "battery_risk": "low",
+  "swollen_battery": false,
+  "repairable": true,
+  "still_usable": false,
+  "confidence": 0.88,
+  "reason": "Screen glass is cracked but body and battery appear intact."
+}
