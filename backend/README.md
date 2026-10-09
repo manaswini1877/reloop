@@ -183,8 +183,8 @@ No secrets are hardcoded anywhere. All names come from CloudFormation references
 |-------|-----------|--------|
 | 1 | `POST /upload-url` | ✅ done |
 | 2 | `GET /items`, `GET /items/{id}` | ✅ done |
-| 3 (this) | `POST /analyze` (Bedrock + Mock) | ✅ done |
-| 4 | Fallback cache & resilience | 🔜 |
+| 3 | `POST /analyze` (Bedrock + Mock) | ✅ done |
+| 4 (this) | Hardening, Safety Fallback, Demo Cache, Throttling | ✅ done |
 
 ---
 
@@ -432,5 +432,106 @@ $opt.StatusCode
 $opt.Headers["Access-Control-Allow-Origin"]
 ```
 Expected: `200` with `Access-Control-Allow-Origin: *`.
+
+---
+
+## Phase 4 – Backend Hardening, Fallback & Observability
+
+### Running all unit tests
+
+```powershell
+py -3.12 backend\tests\test_logic.py
+py -3.12 backend\tests\test_pipeline.py
+```
+Expected:
+- `ALL UNIT TESTS PASSED!`
+- `ALL PIPELINE TESTS PASSED!`
+
+---
+
+### Deploy Phase 4 ⚠️ changes AWS resources
+
+> **Stop and confirm before running.**
+
+```powershell
+cd C:\Users\manas\reloop\backend
+sam build
+sam deploy
+```
+
+---
+
+### Observability & Reading CloudWatch Logs
+
+Every `POST /analyze` invocation emits exactly one structured JSON log record without logging raw image bytes or item details:
+
+```json
+{
+  "request_id": "c1234567-89ab-cdef-0123-456789abcdef",
+  "mode": "mock",
+  "source": "mock",
+  "route": "repair",
+  "confidence": 0.87,
+  "latency_ms": 124.5,
+  "error_type": null
+}
+```
+
+To tail the logs live from PowerShell:
+
+```powershell
+# Get the full Lambda function name from CloudFormation
+$ANALYZE_FUNC = (aws cloudformation describe-stack-resources `
+    --stack-name reloop-backend `
+    --region us-east-1 `
+    --query "StackResources[?LogicalResourceId=='AnalyzeFunction'].PhysicalResourceId" `
+    --output text)
+
+# Tail logs from the last 10 minutes
+aws logs tail "/aws/lambda/$ANALYZE_FUNC" --since 10m --region us-east-1
+```
+
+---
+
+### Safety Fallback & Demo Cache
+
+#### 1. Safe Hazard Fallback
+If Bedrock returns text that cannot be parsed as valid JSON or fails schema validation, but mentions battery-related terms (e.g. `battery`, `lithium`, `li-ion`, `swollen`, `bulg`, `power bank`, `phone`, `vape`, `earbuds`), the system automatically routes to:
+- `route`: `"hazard"`
+- `battery_risk`: `"medium"`
+- `confidence`: `0.3`
+- `reason`: `"Automatic safety fallback: the analysis was unclear and a battery may be present."`
+- `status`: `"reported"`
+- Safe bilingual hazard steps populated automatically.
+This guarantees the backend never mistakenly returns `"recycle"` when a battery might be involved.
+
+#### 2. Demo Fallback Cache
+If the Bedrock call fails (e.g. account quota, service outage, timeout), the pipeline checks `demo_cache.json` matching the SHA-256 hash of the image bytes.
+To pre-populate or update demo cache entries using real model results:
+
+```powershell
+python backend\scripts\add_demo_cache.py --photo path\to\photo.jpg --result path\to\result.json
+```
+
+---
+
+### API Gateway Hardening
+
+1. **Throttling**: `POST /analyze` is throttled on API Gateway with a Rate Limit of 5 req/s and Burst Limit of 10 requests to safeguard against runaway costs.
+2. **CORS on API Gateway Errors**: Configured `DEFAULT_4XX` and `DEFAULT_5XX` GatewayResponses with `Access-Control-Allow-Origin: *` so even API Gateway 403, 404, or 429 throttling errors are readable by the browser frontend.
+3. **Payload & Input Guards**:
+   - Request bodies over 2 KB are rejected with 400.
+   - S3 images over 3.5 MB are rejected with 413.
+   - Image magic bytes (JPEG `FF D8 FF`, PNG `89 50 4E 47`, WEBP `RIFF...WEBP`) must match the file extension or the request is rejected with 400.
+
+---
+
+### Honest Project Limitations
+
+1. **Mock Mode**: Intended for local development and accounts awaiting Bedrock quota approval. Responses are derived deterministically from the hash of the `image_key`.
+2. **Demo Cache**: Exclusively an emergency reliability safety net for presentations and demos. All cached items must come from actual model outputs.
+3. **Scan-based Item Listing**: `GET /items` performs a full table scan and in-memory sort. This is optimal for hackathon demo datasets (<100 items). For production scale, a Global Secondary Index (GSI) on `status` + `created_at` or a DynamoDB Streams architecture should be added.
+4. **Telugu Translations**: Telugu strings (`safe_steps_te`) are placeholders provided for contract compatibility and require human verification by a native speaker before production release.
+
 
 

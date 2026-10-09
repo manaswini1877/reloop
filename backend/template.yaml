@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: ReLoop backend – Phase 3 (adds POST /analyze with Bedrock and mock support)
+Description: ReLoop backend – Phase 4 (Hardened analyze pipeline, safety fallback, demo cache, API throttling, gateway CORS)
 
 # ---------------------------------------------------------------------------
 # Parameters
@@ -94,6 +94,23 @@ Resources:
         AllowOrigin: "'*'"
         AllowMethods: "'GET,POST,OPTIONS'"
         AllowHeaders: "'Content-Type'"
+      MethodSettings:
+        # Cost guard: throttle POST /analyze to prevent runaway calls or costs
+        - ResourcePath: "/analyze"
+          HttpMethod: "POST"
+          ThrottlingRateLimit: 5
+          ThrottlingBurstLimit: 10
+      GatewayResponses:
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type'"
 
   # ── /upload-url Lambda ────────────────────────────────────────────────────
   UploadUrlFunction:

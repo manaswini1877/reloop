@@ -18,7 +18,10 @@ if ANALYZE_DIR not in sys.path:
 
 from logic import (
     apply_safety_rules,
+    build_safe_hazard,
+    detect_image_type,
     extract_json,
+    looks_like_battery,
     mock_result,
     validate_and_normalize,
 )
@@ -248,6 +251,74 @@ def test_apply_safety_rules():
     print("  [OK] apply_safety_rules passed all tests")
 
 
+# ── Test looks_like_battery ───────────────────────────────────────────────────
+
+def test_looks_like_battery():
+    print("Testing looks_like_battery...")
+
+    # True cases
+    assert looks_like_battery("This device contains a lithium battery.") is True
+    assert looks_like_battery("Found swollen cells inside.") is True
+    assert looks_like_battery("The casing has a distinct bulg.") is True
+    assert looks_like_battery("Disassembled power bank.") is True
+    assert looks_like_battery("Damaged mobile phone.") is True
+    assert looks_like_battery("Old earbuds case with li-ion power.") is True
+    assert looks_like_battery("Disposable vape device.") is True
+
+    # False cases
+    assert looks_like_battery("A plastic monitor stand.") is False
+    assert looks_like_battery("Wooden desk organizer.") is False
+    assert looks_like_battery("USB cable with cracked insulation.") is False
+    assert looks_like_battery("") is False
+
+    print("  [OK] looks_like_battery passed all tests")
+
+
+# ── Test build_safe_hazard ────────────────────────────────────────────────────
+
+def test_build_safe_hazard():
+    print("Testing build_safe_hazard...")
+    hazard = build_safe_hazard()
+
+    # Validate against contract requirements
+    validated = validate_and_normalize(hazard)
+    assert validated["route"] == "hazard"
+    assert validated["battery_risk"] == "medium"
+    assert validated["swollen_battery"] is False
+    assert validated["confidence"] == 0.3
+    assert len(validated["safe_steps_en"]) >= 1
+    assert len(validated["safe_steps_te"]) >= 1
+
+    print("  [OK] build_safe_hazard passed all tests")
+
+
+# ── Test detect_image_type ────────────────────────────────────────────────────
+
+def test_detect_image_type():
+    print("Testing detect_image_type...")
+
+    # 1. JPEG: starts with FF D8 FF
+    jpeg_bytes = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00"
+    assert detect_image_type(jpeg_bytes) == "jpeg"
+
+    # 2. PNG: starts with 89 50 4E 47
+    png_bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    assert detect_image_type(png_bytes) == "png"
+
+    # 3. WEBP: RIFF....WEBP
+    webp_bytes = b"RIFF\x24\x00\x00\x00WEBPVP8 "
+    assert detect_image_type(webp_bytes) == "webp"
+
+    # 4. Invalid / fake data
+    assert detect_image_type(b"GIF89a...") is None
+    assert detect_image_type(b"%PDF-1.4...") is None
+    assert detect_image_type(b"plain text data") is None
+    assert detect_image_type(b"") is None
+    assert detect_image_type(None) is None
+
+    print("  [OK] detect_image_type passed all tests")
+
+
 # ── Test mock_result ──────────────────────────────────────────────────────────
 
 def test_mock_result():
@@ -278,6 +349,9 @@ def main():
     test_extract_json()
     test_validate_and_normalize()
     test_apply_safety_rules()
+    test_looks_like_battery()
+    test_build_safe_hazard()
+    test_detect_image_type()
     test_mock_result()
     print("\nALL UNIT TESTS PASSED!")
 

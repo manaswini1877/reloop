@@ -3,15 +3,15 @@ analyze/app.py
 --------------
 Lambda handler for POST /analyze.
 
-Analyzes an uploaded image via AWS Bedrock (or mock mode if USE_MOCK="true"),
-enforces contract safety rules, persists the resulting Item to DynamoDB,
-and returns the Item JSON.
+Validates input size & magic bytes, delegates analysis to pipeline.py or mock_result,
+persists the resulting Item to DynamoDB, emits structured JSON logs, and returns the Item JSON.
 """
 
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -21,10 +21,12 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from logic import (
-    apply_safety_rules,
-    extract_json,
+    detect_image_type,
     mock_result,
-    validate_and_normalize,
+)
+from pipeline import (
+    AnalysisError,
+    run_analysis,
 )
 
 # ── Logging ──────────────────────────────────────────────────────────────────
@@ -37,7 +39,8 @@ TABLE_NAME = os.environ.get("TABLE_NAME", "")
 BEDROCK_MODEL_ID = os.environ.get("BEDROCK_MODEL_ID", "")
 USE_MOCK = os.environ.get("USE_MOCK", "false").lower() == "true"
 
-MAX_IMAGE_BYTES = int(3.5 * 1024 * 1024)  # 3.5 MB
+MAX_BODY_BYTES = 2048                     # 2 KB body limit
+MAX_IMAGE_BYTES = int(3.5 * 1024 * 1024)  # 3.5 MB image limit
 IMAGE_KEY_REGEX = re.compile(r"^uploads/[A-Za-z0-9._-]+\.(jpg|jpeg|png|webp)$")
 
 FORMAT_MAP = {
@@ -55,6 +58,14 @@ try:
 except Exception as exc:  # noqa: BLE001
     logger.warning("Could not read prompt.txt: %s", exc)
     SYSTEM_PROMPT = ""
+
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "demo_cache.json")
+try:
+    with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        DEMO_CACHE = json.load(f)
+except Exception as exc:  # noqa: BLE001
+    logger.warning("Could not load demo_cache.json: %s", exc)
+    DEMO_CACHE = {}
 
 boto_config = Config(read_timeout=25, retries={"max_attempts": 1})
 bedrock_client = boto3.client("bedrock-runtime", config=boto_config)
@@ -85,9 +96,27 @@ def _decimal_serializer(obj):
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 
-def _error(status_code: int, message: str) -> dict:
-    logger.error("Returning %d: %s", status_code, message)
-    return _response(status_code, {"error": message})
+def _log_record(
+    request_id: str | None,
+    mode: str,
+    source: str | None,
+    route: str | None,
+    confidence: float | None,
+    start_time: float,
+    error_type: str | None = None,
+) -> None:
+    """Emit exactly one structured JSON log line per request."""
+    latency_ms = round((time.time() - start_time) * 1000, 2)
+    record = {
+        "request_id": request_id or "unknown",
+        "mode": mode,
+        "source": source,
+        "route": route,
+        "confidence": confidence,
+        "latency_ms": latency_ms,
+        "error_type": error_type,
+    }
+    logger.info(json.dumps(record))
 
 
 def _to_dynamodb_item(item: dict) -> dict:
@@ -104,50 +133,66 @@ def _to_dynamodb_item(item: dict) -> dict:
 # ── Handler ───────────────────────────────────────────────────────────────────
 
 def lambda_handler(event: dict, context) -> dict:  # noqa: ANN001
-    logger.info("POST /analyze invoked")
+    start_time = time.time()
+    request_id = getattr(context, "aws_request_id", None) if context else None
+    mode = "mock" if USE_MOCK else "real"
 
-    # ── Parse & Validate Request Body ─────────────────────────────────────────
+    raw_body = event.get("body") or ""
+
+    # 1. Reject request bodies over 2 KB
+    if len(raw_body.encode("utf-8")) > MAX_BODY_BYTES:
+        _log_record(request_id, mode, None, None, None, start_time, error_type="body_too_large")
+        return _response(400, {"error": "Request body too large"})
+
+    # 2. Parse & Validate Request Body
     try:
-        body = json.loads(event.get("body") or "{}")
+        body = json.loads(raw_body or "{}")
     except (json.JSONDecodeError, TypeError) as exc:
-        return _error(400, f"Invalid JSON body: {exc}")
+        _log_record(request_id, mode, None, None, None, start_time, error_type="bad_json")
+        return _response(400, {"error": f"Invalid JSON body: {exc}"})
 
     if not isinstance(body, dict):
-        return _error(400, "Request body must be a JSON object")
+        _log_record(request_id, mode, None, None, None, start_time, error_type="body_not_object")
+        return _response(400, {"error": "Request body must be a JSON object"})
 
     image_key = body.get("image_key")
     if not image_key or not isinstance(image_key, str):
-        return _error(400, "Missing required field: image_key")
+        _log_record(request_id, mode, None, None, None, start_time, error_type="missing_image_key")
+        return _response(400, {"error": "Missing required field: image_key"})
 
     if not IMAGE_KEY_REGEX.match(image_key):
-        return _error(
+        _log_record(request_id, mode, None, None, None, start_time, error_type="invalid_image_key")
+        return _response(
             400,
-            "Invalid image_key: must match format uploads/<name>.(jpg|jpeg|png|webp)",
+            {"error": "Invalid image_key: must match format uploads/<name>.(jpg|jpeg|png|webp)"},
         )
 
-    # ── Execution Branch: Mock vs Real Bedrock ─────────────────────────────────
+    # 3. Branch: Mock Mode vs Real Mode
     if USE_MOCK:
-        logger.info("MOCK MODE: returning mock analysis for %s", image_key)
+        logger.info("MOCK MODE")
+        source = "mock"
         analysis = mock_result(image_key)
     else:
-        # Real flow
         # a. head_object to verify existence and check size
         try:
             head_resp = s3_client.head_object(Bucket=BUCKET_NAME, Key=image_key)
         except ClientError as exc:
             err_code = exc.response.get("Error", {}).get("Code", "")
             if err_code in ("404", "NoSuchKey", "NotFound"):
-                return _error(404, "Image not found")
+                _log_record(request_id, mode, None, None, None, start_time, error_type="image_not_found")
+                return _response(404, {"error": "Image not found"})
             logger.error("S3 head_object error (%s)", err_code)
-            return _error(500, "Failed to verify image")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="s3_head_error")
+            return _response(500, {"error": "Failed to verify image"})
         except Exception as exc:  # noqa: BLE001
             logger.error("Unexpected S3 error: %s", exc)
-            return _error(500, "Failed to verify image")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="s3_head_unexpected")
+            return _response(500, {"error": "Failed to verify image"})
 
         content_length = head_resp.get("ContentLength", 0)
-        logger.info("Image size: %d bytes", content_length)
         if content_length > MAX_IMAGE_BYTES:
-            return _error(413, "Image too large")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="image_too_large")
+            return _response(413, {"error": "Image too large"})
 
         # b. get_object and read bytes
         try:
@@ -156,72 +201,49 @@ def lambda_handler(event: dict, context) -> dict:  # noqa: ANN001
         except ClientError as exc:
             err_code = exc.response.get("Error", {}).get("Code", "")
             logger.error("S3 get_object error (%s)", err_code)
-            return _error(500, "Failed to retrieve image")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="s3_get_error")
+            return _response(500, {"error": "Failed to retrieve image"})
         except Exception as exc:  # noqa: BLE001
             logger.error("Unexpected error reading image: %s", exc)
-            return _error(500, "Failed to retrieve image")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="s3_get_unexpected")
+            return _response(500, {"error": "Failed to retrieve image"})
 
+        # c. Verify magic bytes match file extension
         ext = image_key.rsplit(".", 1)[-1].lower()
-        image_format = FORMAT_MAP.get(ext, "jpeg")
+        expected_type = FORMAT_MAP.get(ext)
+        detected_type = detect_image_type(image_bytes)
 
-        # c. Verify Bedrock Model ID
+        if not detected_type or detected_type != expected_type:
+            _log_record(request_id, mode, None, None, None, start_time, error_type="invalid_magic_bytes")
+            return _response(400, {"error": "File is not a valid image"})
+
+        # d. Verify Bedrock Model ID
         model_id = os.environ.get("BEDROCK_MODEL_ID") or BEDROCK_MODEL_ID
         if not model_id:
             logger.error("BEDROCK_MODEL_ID is empty")
-            return _error(500, "Model not configured")
+            _log_record(request_id, mode, None, None, None, start_time, error_type="model_not_configured")
+            return _response(500, {"error": "Model not configured"})
 
-        # d. Call Bedrock Converse API
+        # e. Run Analysis via pipeline
         try:
-            system_param = [{"text": SYSTEM_PROMPT}] if SYSTEM_PROMPT else []
-            bedrock_resp = bedrock_client.converse(
-                modelId=model_id,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "image": {
-                                    "format": image_format,
-                                    "source": {
-                                        "bytes": image_bytes,
-                                    },
-                                }
-                            },
-                            {
-                                "text": "Analyze this item.",
-                            },
-                        ],
-                    }
-                ],
-                system=system_param,
-                inferenceConfig={
-                    "maxTokens": 600,
-                    "temperature": 0.0,
-                },
+            analysis, source = run_analysis(
+                bedrock_client=bedrock_client,
+                model_id=model_id,
+                system_prompt=SYSTEM_PROMPT,
+                image_bytes=image_bytes,
+                image_format=detected_type,
+                demo_cache=DEMO_CACHE,
             )
-        except ClientError as exc:
-            err_code = exc.response.get("Error", {}).get("Code", "")
-            logger.error("Bedrock converse ClientError (%s)", err_code)
-            return _error(502, "Analysis failed")
+        except AnalysisError as exc:
+            logger.error("Analysis failed: %s", exc)
+            _log_record(request_id, mode, None, None, None, start_time, error_type="analysis_error")
+            return _response(502, {"error": "Analysis failed"})
         except Exception as exc:  # noqa: BLE001
-            logger.error("Bedrock converse unexpected error: %s", type(exc).__name__)
-            return _error(502, "Analysis failed")
+            logger.error("Unexpected error in analysis pipeline: %s", type(exc).__name__)
+            _log_record(request_id, mode, None, None, None, start_time, error_type="pipeline_unexpected")
+            return _response(502, {"error": "Analysis failed"})
 
-        # Extract text from Converse response
-        output_msg = bedrock_resp.get("output", {}).get("message", {})
-        content_blocks = output_msg.get("content", [])
-        response_text = "".join(b.get("text", "") for b in content_blocks if "text" in b)
-
-        # e. Extract, validate, normalize, and apply safety rules
-        try:
-            raw_json = extract_json(response_text)
-            normalized = validate_and_normalize(raw_json)
-            analysis = apply_safety_rules(normalized)
-        except ValueError as exc:
-            logger.error("Model output processing error: %s", exc)
-            return _error(502, "Analysis failed")
-
-    # ── Construct Item Object ─────────────────────────────────────────────────
+    # 4. Construct Item Object (Strictly contract fields only)
     item_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -241,18 +263,20 @@ def lambda_handler(event: dict, context) -> dict:  # noqa: ANN001
         "status": "reported",
     }
 
-    logger.info("Classified item %s as route='%s'", item_id, item["route"])
-
-    # ── Save to DynamoDB ──────────────────────────────────────────────────────
+    # 5. Persist to DynamoDB
     try:
         table = dynamodb.Table(TABLE_NAME)
         table.put_item(Item=_to_dynamodb_item(item))
     except ClientError as exc:
         err_code = exc.response.get("Error", {}).get("Code", "")
         logger.error("DynamoDB put_item ClientError (%s)", err_code)
-        return _error(500, "Internal error")
+        _log_record(request_id, mode, source, item["route"], item["confidence"], start_time, error_type="dynamodb_error")
+        return _response(500, {"error": "Internal error"})
     except Exception as exc:  # noqa: BLE001
         logger.error("DynamoDB put_item unexpected error: %s", type(exc).__name__)
-        return _error(500, "Internal error")
+        _log_record(request_id, mode, source, item["route"], item["confidence"], start_time, error_type="dynamodb_unexpected")
+        return _response(500, {"error": "Internal error"})
 
+    # 6. Structured success log & response
+    _log_record(request_id, mode, source, item["route"], item["confidence"], start_time, error_type=None)
     return _response(200, item)

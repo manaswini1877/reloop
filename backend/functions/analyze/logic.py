@@ -31,6 +31,73 @@ DEFAULT_STEPS_TE = [
     "క్యాంపస్ ఈ-వేస్ట్ సిబ్బందికి అప్పగించండి",
 ]
 
+BATTERY_KEYWORDS = [
+    "battery",
+    "batteries",
+    "lithium",
+    "li-ion",
+    "swollen",
+    "bulg",
+    "power bank",
+    "powerbank",
+    "phone",
+    "mobile",
+    "laptop",
+    "earbuds",
+    "vape",
+    "e-cigarette",
+    "cell",
+]
+
+
+# ── Safety Fallback & Battery Detection ───────────────────────────────────────
+
+def looks_like_battery(text: str) -> bool:
+    """
+    Case-insensitive keyword check on raw model text for battery-related indicators.
+    """
+    if not isinstance(text, str):
+        return False
+    lower = text.lower()
+    return any(kw in lower for kw in BATTERY_KEYWORDS)
+
+
+def build_safe_hazard() -> dict:
+    """
+    Return a complete analysis dict when analysis is unclear and a battery may be present.
+    """
+    return {
+        "item": "Unidentified item (possible battery)",
+        "condition": "damaged",
+        "battery_risk": "medium",
+        "swollen_battery": False,
+        "route": "hazard",
+        "confidence": 0.3,
+        "reason": "Automatic safety fallback: the analysis was unclear and a battery may be present.",
+        "safe_steps_en": DEFAULT_STEPS_EN[:],
+        "safe_steps_te": DEFAULT_STEPS_TE[:],
+    }
+
+
+def detect_image_type(image_bytes: bytes) -> str | None:
+    """
+    Inspect magic bytes of raw image data:
+      - JPEG: starts with FF D8 FF
+      - PNG:  starts with 89 50 4E 47 (\x89PNG)
+      - WEBP: starts with 'RIFF' at 0..3 and 'WEBP' at 8..11
+    Returns 'jpeg', 'png', 'webp', or None if unrecognized.
+    """
+    if not isinstance(image_bytes, (bytes, bytearray)):
+        return None
+    if len(image_bytes) >= 3 and image_bytes[:3] == b"\xff\xd8\xff":
+        return "jpeg"
+    if len(image_bytes) >= 4 and image_bytes[:4] == b"\x89PNG":
+        return "png"
+    if len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
 
 # ── extract_json ──────────────────────────────────────────────────────────────
 
